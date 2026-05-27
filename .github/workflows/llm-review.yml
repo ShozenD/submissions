@@ -121,35 +121,35 @@ jobs:
 
           user_prompt = f"""以下の問題に対する学習者の回答を評価してください。
 
-【問題】
-{question_text}
+          【問題】
+          {question_text}
 
-【採点基準】
-{rubric}
+          【採点基準】
+          {rubric}
 
-【学習者の回答】
-{student_answer}
+          【学習者の回答】
+          {student_answer}
 
-以下のフォーマットで日本語でフィードバックを返してください。
+          以下のフォーマットで日本語でフィードバックを返してください。
 
-## 🤖 AI フィードバック
+          ## 🤖 AI フィードバック
 
-**スコア**: XX / 100 点
+          **スコア**: XX / 100 点
 
-### ✅ 良かった点
+          ### ✅ 良かった点
 
-（具体的に箇条書きで）
+          （具体的に箇条書きで）
 
-### 📝 改善点・補足
+          ### 📝 改善点・補足
 
-（具体的に箇条書きで）
+          （具体的に箇条書きで）
 
-### 💬 総評
+          ### 💬 総評
 
-（1〜2 文で全体的なコメント）
+          （1〜2 文で全体的なコメント）
 
----
-*このフィードバックは GitHub Models（{os.environ.get('REVIEW_MODEL', 'gpt-4o-mini')}）によって自動生成されました。最終的な評価はインストラクターが行います。*"""
+          ---
+          *このフィードバックは GitHub Models（{os.environ.get('REVIEW_MODEL', 'gpt-4o-mini')}）によって自動生成されました。最終的な評価はインストラクターが行います。*"""
 
           response = client.chat.completions.create(
               model=os.environ.get("REVIEW_MODEL", "gpt-4o-mini"),
