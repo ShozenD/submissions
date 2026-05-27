@@ -1,0 +1,201 @@
+# ============================================================
+# LLM 自動レビュー ワークフロー（GitHub Models 版）
+#
+# 配置場所（submissions リポジトリ）:
+#   .github/workflows/llm-review.yml
+#
+# 追加の API キーは不要。
+# GITHUB_TOKEN（GitHub Actions が自動生成）だけで動作します。
+#
+# 使用モデル: gpt-4o-mini（GitHub Models 無料枠）
+# 変更する場合は REVIEW_MODEL 環境変数を書き換えてください。
+#
+# 必要な Issue ラベル（submissions リポジトリ）:
+#   submission   — 学習者からの提出（nd.submit() が自動付与）
+#   needs-review — レビュー待ち（nd.submit() が自動付与）
+#   ai-reviewed  — AI レビュー完了（このワークフローが付与）
+#   reviewed     — インストラクターレビュー完了（手動で付与）
+# ============================================================
+
+name: LLM Auto Review
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  review:
+    # "submission" ラベルが付いた Issue のみ処理する
+    if: contains(join(github.event.issue.labels.*.name, ','), 'submission')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write    # コメント投稿・ラベル操作に必要
+      contents: read   # answer_keys YAML の取得に必要
+
+    env:
+      REVIEW_MODEL: gpt-4o-mini   # 変更可能なモデル名
+
+    steps:
+      - name: Run LLM review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          REVIEW_MODEL: ${{ env.REVIEW_MODEL }}
+        run: |
+          pip install openai pyyaml requests -q
+
+          python3 << 'PYEOF'
+          import os, re, base64, sys
+          import requests
+          import yaml
+          from openai import OpenAI
+
+          # ── 1. Issue タイトルから lesson_id と question_id を抽出 ──────────────
+          # タイトル形式: "[提出] session_01 / free1 — 田中花子"
+          title = os.environ["ISSUE_TITLE"]
+          m = re.match(r'\[提出\]\s+(\S+)\s+/\s+(\S+)\s+—', title)
+          if not m:
+              print(f"タイトルのパースに失敗しました: {title!r}")
+              print("review_prompts を持つ Issue ではないためスキップします")
+              sys.exit(0)
+
+          lesson_id   = m.group(1)
+          question_id = m.group(2)
+          print(f"lesson_id={lesson_id}, question_id={question_id}")
+
+          # ── 2. Issue 本文から回答テキストを抽出 ──────────────────────────────
+          body = os.environ["ISSUE_BODY"]
+          answer_match = re.search(
+              r'## 回答\n\n(.*?)\n\n## ノートブック',
+              body,
+              re.DOTALL,
+          )
+          student_answer = answer_match.group(1).strip() if answer_match else body.strip()
+
+          # ── 3. submissions リポジトリから answer_keys YAML を取得 ─────────────
+          token = os.environ["GH_TOKEN"]
+          repo  = os.environ["REPO"]
+          headers = {
+              "Authorization": f"token {token}",
+              "Accept": "application/vnd.github.v3+json",
+          }
+          yaml_url = (
+              f"https://api.github.com/repos/{repo}/contents"
+              f"/answer_keys/{lesson_id}.yaml"
+          )
+          resp = requests.get(yaml_url, headers=headers, timeout=10)
+          if resp.status_code != 200:
+              print(f"YAML の取得に失敗しました ({resp.status_code})。スキップします。")
+              sys.exit(0)
+
+          yaml_data = yaml.safe_load(
+              base64.b64decode(resp.json()["content"]).decode("utf-8")
+          )
+
+          # ── 4. review_prompts から対象問題の設定を取得 ────────────────────────
+          review_prompts = yaml_data.get("review_prompts", {})
+          prompt_config  = review_prompts.get(question_id)
+          if not prompt_config:
+              print(f"review_prompts に {question_id!r} が見つかりません。スキップします。")
+              sys.exit(0)
+
+          question_text = prompt_config.get("question", "（問題文なし）")
+          rubric        = prompt_config.get("rubric", "（採点基準なし）")
+
+          # ── 5. GitHub Models API でレビューを生成 ─────────────────────────────
+          # GITHUB_TOKEN をそのまま使用（追加の API キー不要）
+          client = OpenAI(
+              base_url="https://models.inference.ai.azure.com",
+              api_key=token,
+          )
+
+          system_prompt = (
+              "あなたはデータサイエンス教育の採点アシスタントです。"
+              "学習者の自由回答を評価し、建設的なフィードバックを日本語で提供してください。"
+              "フィードバックは学習者が自分の理解を深め、次のステップに進めるよう"
+              "具体的・肯定的に書いてください。"
+          )
+
+          user_prompt = f"""以下の問題に対する学習者の回答を評価してください。
+
+【問題】
+{question_text}
+
+【採点基準】
+{rubric}
+
+【学習者の回答】
+{student_answer}
+
+以下のフォーマットで日本語でフィードバックを返してください。
+
+## 🤖 AI フィードバック
+
+**スコア**: XX / 100 点
+
+### ✅ 良かった点
+
+（具体的に箇条書きで）
+
+### 📝 改善点・補足
+
+（具体的に箇条書きで）
+
+### 💬 総評
+
+（1〜2 文で全体的なコメント）
+
+---
+*このフィードバックは GitHub Models（{os.environ.get('REVIEW_MODEL', 'gpt-4o-mini')}）によって自動生成されました。最終的な評価はインストラクターが行います。*"""
+
+          response = client.chat.completions.create(
+              model=os.environ.get("REVIEW_MODEL", "gpt-4o-mini"),
+              messages=[
+                  {"role": "system", "content": system_prompt},
+                  {"role": "user",   "content": user_prompt},
+              ],
+              max_tokens=1024,
+          )
+          feedback = response.choices[0].message.content
+          print("✅ フィードバックを生成しました")
+
+          # ── 6. Issue にコメントとして投稿 ──────────────────────────────────
+          issue_number = os.environ["ISSUE_NUMBER"]
+          comment_url  = (
+              f"https://api.github.com/repos/{repo}"
+              f"/issues/{issue_number}/comments"
+          )
+          comment_resp = requests.post(
+              comment_url,
+              headers=headers,
+              json={"body": feedback},
+              timeout=10,
+          )
+          if comment_resp.status_code == 201:
+              print("✅ フィードバックをコメントとして投稿しました")
+          else:
+              print(f"❌ コメント投稿失敗: {comment_resp.status_code}")
+              print(comment_resp.text)
+              sys.exit(1)
+
+          # ── 7. ラベルを更新（needs-review を削除して ai-reviewed を追加）────
+          labels_base = (
+              f"https://api.github.com/repos/{repo}"
+              f"/issues/{issue_number}/labels"
+          )
+          requests.delete(f"{labels_base}/needs-review", headers=headers, timeout=10)
+          add_resp = requests.post(
+              labels_base,
+              headers=headers,
+              json={"labels": ["ai-reviewed"]},
+              timeout=10,
+          )
+          if add_resp.status_code in (200, 201):
+              print("✅ ラベルを更新しました（needs-review → ai-reviewed）")
+          else:
+              print(f"⚠️ ラベル更新に失敗しました: {add_resp.status_code}")
+
+          PYEOF
