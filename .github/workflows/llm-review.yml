@@ -31,6 +31,7 @@ jobs:
     permissions:
       issues: write    # コメント投稿・ラベル操作に必要
       contents: read   # answer_keys YAML の取得に必要
+      models: read     # GitHub Models API の使用に必要
 
     env:
       REVIEW_MODEL: gpt-4o-mini   # 変更可能なモデル名
