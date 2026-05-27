@@ -1,0 +1,13 @@
+# answer_keys/session_01.yaml
+
+lesson_id: session_01
+github_owner: ShozenD
+github_repo: submissions
+
+answers:
+  q1: true                   # 問1: p値 < 0.05 か？
+  q2: 11                     # 問2: a_B_post の値
+  q3:
+    value: 0.993             # 問3: P(B > A) の推定値
+    tolerance: 0.005
+  q4: true                   # 問4: B を推奨するか？
